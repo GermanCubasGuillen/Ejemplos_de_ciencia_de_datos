@@ -1,0 +1,84 @@
+---
+title: "Clasificación con máquinas de vectores soporte"
+output:
+  html_document:
+    df_print: paged
+---
+
+En este ejemplo se muestra como aplicar, ajustar e interpretar una máquina de soporte vectorial, con el fin de clasificar los emails del clásico conjunto de datos que incorpora la librería "Kernlab" en Spam o correo deseado.
+
+Convertiremos los datos que incorpora la anterior mencionada librería a  tibble. Los tibbles no son más que data frames que modifican algunas características antiguas y nos hacen la vida más fácil a la hora de trabajar con paquetes como *tidyverse*.
+
+```{r}
+# Cargamos las librerías que emplearemos en nuestro análisis
+suppressMessages(library(tidyverse))
+suppressMessages(library(mlr))
+suppressMessages(library(parallelMap))
+suppressMessages(library(parallel))
+# Cargamos los datos
+data(spam, package = "kernlab")
+spam_tibble<-as_tibble(spam)
+list(spam_tibble)
+```
+
+Aqui puedo pararme a describir las variables del conjunto de datos 
+
+## Ajuste de los hiperparámetros del modelo
+
+A continuación estebleceremos que propósito tiene nuestra máquina de soporte vectorial, y que Learner usaremos, en este sencillo ejemplo realizaremos una clasificación de los correos electrónicos en dos categorías (columna type), correo deseado y no deseado, y emplearemos como Learner "classif.svm" (librería mlr), que no es más que maquina de soporte vectorial para clasificación.
+
+```{r}
+proposito_spam <- makeClassifTask(data=spam_tibble, target = "type" )
+msv<- makeLearner("classif.svm")
+```
+
+Ahora, antes de proceder a entrenar nuestro modelo, vamos a ajustar los hiperparámetros, en este caso, podemos ajustar los hiperparámetros siguientes:
+
+- cost
+- kernel (probaremos polinómico (cuando es de grado 1 es lineal, por eso no lo especificaremos), radial y sigmoide) 
+- degree
+- gamma
+- scale (este hiperparámetro viene por defecto activo, esto se debe a que el algoritmo de máquina de soporte vectorial es sensible a los predictores con distintas escala.)
+
+```{r}
+kernels <- c("polynomial", "radial", "sigmoid")
+msv_espacio_parametrico<- makeParamSet(
+  makeDiscreteParam("kernel", values= kernels),
+  makeIntegerParam("degree", lower=1, upper=3),
+  makeNumericParam("cost", lower=0.1, upper=10),
+  makeNumericParam("gamma", lower = 0.1, 10)
+)
+
+
+```
+
+
+Para elegir la combinacion hiperparamétrica definitva para nuestro modelo realizaremos una "grid_search", esto es, entrenaremos el modelo empleando todas las combinaciones de parámetros posibles dentro de las que hemos definido en nuestro espacio paramétrico, y nos quedaremos con la que mejor desempeño demuestre (mi ordenador cuenta con un procesadorde 12 núcleos que puede generar un resultado en un tiempo razonable y no tengo prisa, de lo contrario podríamos obtener los prámetros con una busqueda aleatoria (random search), que, en este caso, no generaría una gran diferencia).
+
+```{r}
+grid_search <- makeTuneControlGrid()
+ajuste_valid<- makeResampleDesc("Holdout", split= 2/3)
+parallelStartSocket(cpus = detectCores())
+
+ajuste_hiper<- tuneParams( "classif.svm", task=proposito_spam,
+                           resampling = ajuste_valid,
+                           par.set = msv_espacio_parametrico,
+                           control = grid_search)
+
+parallelStop()
+
+#El mejor modelo encontrado
+ajuste_hiper
+
+```
+
+Ahora procedemos a entrenar nuestro modelo con estos hiperparámetros:
+
+```{r}
+msv_definitivo<- setHyperPars(makeLearner("classif.svm"),
+                              par.vals=ajuste_hiper$x)
+
+modelo_msv<- train(msv_definitivo, proposito_spam)
+modelo_msv
+```
+
